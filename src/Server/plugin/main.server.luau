@@ -61,6 +61,18 @@ local function decodeArgs(rawValue: string): (boolean, any)
 	return true, result
 end
 
+local function normalizeStudioArgs(decodedArgs: any): { any }
+	if decodedArgs == nil then
+		return {}
+	end
+
+	if type(decodedArgs) == "table" then
+		return decodedArgs
+	end
+
+	return { decodedArgs }
+end
+
 local function setButtonsEnabled(enabled: boolean)
 	editButton.Enabled = enabled
 	for _, entry in presetButtons do
@@ -102,6 +114,8 @@ runPreset = function(preset: Preset)
 		return
 	end
 
+	local studioArgs = normalizeStudioArgs(argsOrError)
+
 	isLaunching = true
 	setButtonsEnabled(false)
 	widgetController.setStatus(string.format("Launching %s preset '%s'...", preset.mode, preset.name), false)
@@ -109,14 +123,14 @@ runPreset = function(preset: Preset)
 	task.spawn(function()
 		local success, result = pcall(function()
 			if preset.mode == "Run" then
-				return StudioTestService:ExecuteRunModeAsync(argsOrError)
+				return StudioTestService:ExecuteRunModeAsync(studioArgs)
 			end
 
 			if preset.mode == "Multiplayer" then
-				return StudioTestService:ExecuteMultiplayerTestAsync(preset.playerCount, argsOrError)
+				return StudioTestService:ExecuteMultiplayerTestAsync(preset.playerCount, studioArgs)
 			end
 
-			return StudioTestService:ExecutePlayModeAsync(argsOrError)
+			return StudioTestService:ExecutePlayModeAsync(studioArgs)
 		end)
 
 		isLaunching = false
