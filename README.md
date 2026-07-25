@@ -16,6 +16,11 @@ This plugin adds a fixed `Create / Edit` toolbar button and one dynamic toolbar 
 - `Player Count`: only used for `Multiplayer`, must be between `1` and `8`
 - `Args JSON`: raw JSON passed into `StudioTestService`
 
+`StudioTestService` takes a single `Variant` argument and `GetTestArgs()` returns it
+with its type intact, so the decoded JSON value is forwarded as-is. An object arrives
+as a dictionary, a string arrives as a string, and a number arrives as a number. The
+value is never wrapped in a table.
+
 Examples for `Args JSON`:
 
 ```json
@@ -40,6 +45,29 @@ The plugin only starts Studio test sessions. If you want a test to end automatic
 - `StudioTestService:EndTest(result)` from the server to finish the session
 
 Without that, `ExecutePlayModeAsync`, `ExecuteRunModeAsync`, and `ExecuteMultiplayerTestAsync` will wait until the session ends by normal Studio controls.
+
+## Development
+
+`default.project.json` syncs `src/Server` into `ServerScriptService`, so the plugin
+source lands at `ServerScriptService/plugin` in the connected place:
+
+```sh
+argon serve
+```
+
+That copy is for editing and version control only. `main.server.luau` starts with
+`if not plugin then return end`, so it does nothing when it runs from inside a place.
+
+To actually run it, install it as a local plugin: right-click the synced `plugin`
+folder in `ServerScriptService` and choose **Save as Local Plugin**. Repeat that after
+changing the source, otherwise Studio keeps running the previously installed copy.
+
+## Source layout
+
+- `src/Server/plugin/main.server.luau`: toolbar buttons, widget wiring, test launching
+- `src/Server/plugin/PresetArgs.luau`: decodes `Args JSON` into the `Variant` passed to `StudioTestService`
+- `src/Server/plugin/PresetStore.luau`: reads and writes presets under `TestService/StudioTestPresetPlugin`
+- `src/Server/plugin/Widget.luau`: dock widget UI
 
 ## AI Customization Files
 

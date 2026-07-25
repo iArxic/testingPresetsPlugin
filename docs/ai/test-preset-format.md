@@ -24,6 +24,9 @@ Each preset is represented by a `Folder` with:
 - `Mode` controls which `StudioTestService` entry point is used.
 - `PlayerCount` matters for `Multiplayer` and should still remain valid for other modes.
 - Blank `ArgsJson` is valid and means the plugin passes `nil`.
+- The decoded JSON value keeps its type when it reaches `GetTestArgs()`. A JSON object
+  arrives as a dictionary, and a bare `"string"`, `15`, or `true` arrives as that same
+  scalar rather than being wrapped in a table.
 
 ## Example Structure
 

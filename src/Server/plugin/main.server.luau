@@ -5,6 +5,7 @@ if not plugin then
 	return
 end
 
+local PresetArgs = require(script.Parent.PresetArgs)
 local PresetStore = require(script.Parent.PresetStore)
 local Widget = require(script.Parent.Widget)
 
@@ -44,33 +45,21 @@ local refreshToolbarButtons: () -> ()
 local disconnectPresetStoreObserver: (() -> ())?
 local pendingRefresh = false
 
-local function decodeArgs(rawValue: string): (boolean, any)
-	local trimmed = string.gsub(rawValue, "^%s*(.-)%s*$", "%1")
-	if trimmed == "" then
-		return true, nil
+local function describeTestResult(value: any): string
+	if value == nil then
+		return "nil"
 	end
 
-	local success, result = pcall(function()
-		return HttpService:JSONDecode(trimmed)
-	end)
-
-	if not success then
-		return false, result
+	if type(value) == "table" then
+		local success, encoded = pcall(function()
+			return HttpService:JSONEncode(value)
+		end)
+		if success then
+			return encoded
+		end
 	end
 
-	return true, result
-end
-
-local function normalizeStudioArgs(decodedArgs: any): { any }
-	if decodedArgs == nil then
-		return {}
-	end
-
-	if type(decodedArgs) == "table" then
-		return decodedArgs
-	end
-
-	return { decodedArgs }
+	return tostring(value)
 end
 
 local function setButtonsEnabled(enabled: boolean)
@@ -107,14 +96,12 @@ runPreset = function(preset: Preset)
 		return
 	end
 
-	local argsSuccess, argsOrError = decodeArgs(preset.argsJson)
+	local argsSuccess, studioArgs = PresetArgs.decode(preset.argsJson)
 	if not argsSuccess then
-		widgetController.setStatus(string.format("Invalid Args JSON: %s", tostring(argsOrError)), true)
+		widgetController.setStatus(string.format("Invalid Args JSON: %s", tostring(studioArgs)), true)
 		widgetController.show()
 		return
 	end
-
-	local studioArgs = normalizeStudioArgs(argsOrError)
 
 	isLaunching = true
 	setButtonsEnabled(false)
@@ -137,7 +124,7 @@ runPreset = function(preset: Preset)
 		setButtonsEnabled(true)
 
 		if success then
-			widgetController.setStatus(string.format("Preset '%s' finished with result: %s", preset.name, HttpService:JSONEncode(result)), false)
+			widgetController.setStatus(string.format("Preset '%s' finished with result: %s", preset.name, describeTestResult(result)), false)
 		else
 			widgetController.setStatus(string.format("Launch failed for '%s': %s", preset.name, tostring(result)), true)
 			widgetController.show()
@@ -203,9 +190,9 @@ local function scheduleRefreshToolbarButtons()
 end
 
 local function savePreset(preset: Preset)
-	local argsSuccess, argsOrError = decodeArgs(preset.argsJson)
+	local argsSuccess, argsError = PresetArgs.decode(preset.argsJson)
 	if not argsSuccess then
-		widgetController.setStatus(string.format("Invalid Args JSON: %s", tostring(argsOrError)), true)
+		widgetController.setStatus(string.format("Invalid Args JSON: %s", tostring(argsError)), true)
 		return
 	end
 

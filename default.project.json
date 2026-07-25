@@ -2,10 +2,8 @@
   "name": "rblxPlugins",
   "tree": {
     "$className": "DataModel",
-    "StarterPlayer": {
-      "StarterPlayerScripts": {
-        "$path": "src/Client"
-      }
+    "ServerScriptService": {
+      "$path": "src/Server"
     }
   }
 }
