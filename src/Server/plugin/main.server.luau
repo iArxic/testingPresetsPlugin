@@ -7,6 +7,7 @@ end
 
 local PresetArgs = require(script.Parent.PresetArgs)
 local PresetStore = require(script.Parent.PresetStore)
+local Theme = require(script.Parent.Theme)
 local Widget = require(script.Parent.Widget)
 
 type PresetMode = "Play" | "Run" | "Multiplayer"
@@ -23,6 +24,7 @@ type WidgetController = {
 	setPresets: ({ Preset }) -> (),
 	setStatus: (string, boolean?) -> (),
 	clearSelection: () -> (),
+	destroy: () -> (),
 }
 type ToolbarButtonEntry = {
 	button: PluginToolbarButton,
@@ -243,6 +245,16 @@ disconnectPresetStoreObserver = PresetStore.observeChanges(scheduleRefreshToolba
 editButton.Click:Connect(function()
 	widgetController.show()
 	refreshToolbarButtons()
+end)
+
+plugin.Unloading:Connect(function()
+	if disconnectPresetStoreObserver then
+		disconnectPresetStoreObserver()
+		disconnectPresetStoreObserver = nil
+	end
+
+	widgetController.destroy()
+	Theme.destroy()
 end)
 
 refreshToolbarButtons()

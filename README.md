@@ -4,7 +4,8 @@ This plugin adds a fixed `Create / Edit` toolbar button and one dynamic toolbar 
 
 ## What it does
 
-- Opens a dock widget where you can create, edit, or delete presets.
+- Opens a dock widget where you can create, edit, or delete presets. The widget
+  follows the current Studio theme and validates `Args JSON` as you type.
 - Stores presets inside the current place under `TestService/StudioTestPresetPlugin`.
 - Creates a toolbar button for each saved preset.
 - Launches `StudioTestService` play, run, or multiplayer tests from the saved preset.
@@ -66,8 +67,10 @@ changing the source, otherwise Studio keeps running the previously installed cop
 
 - `src/Server/plugin/main.server.luau`: toolbar buttons, widget wiring, test launching
 - `src/Server/plugin/PresetArgs.luau`: decodes `Args JSON` into the `Variant` passed to `StudioTestService`
-- `src/Server/plugin/PresetStore.luau`: reads and writes presets under `TestService/StudioTestPresetPlugin`
-- `src/Server/plugin/Widget.luau`: dock widget UI
+- `src/Server/plugin/PresetStore.luau`: reads, writes and filters presets under `TestService/StudioTestPresetPlugin`
+- `src/Server/plugin/Theme.luau`: keeps widget colors in sync with the Studio theme
+- `src/Server/plugin/Components.luau`: themed labels, text boxes and buttons
+- `src/Server/plugin/Widget.luau`: dock widget layout and state
 
 ## AI Customization Files
 

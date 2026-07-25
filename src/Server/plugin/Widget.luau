@@ -1,3 +1,8 @@
+local Components = require(script.Parent.Components)
+local PresetArgs = require(script.Parent.PresetArgs)
+local PresetStore = require(script.Parent.PresetStore)
+local Theme = require(script.Parent.Theme)
+
 local Widget = {}
 
 export type PresetMode = "Play" | "Run" | "Multiplayer"
@@ -23,284 +28,561 @@ export type Controller = {
 	setPresets: ({ Preset }) -> (),
 	setStatus: (string, boolean?) -> (),
 	clearSelection: () -> (),
+	destroy: () -> (),
 }
 
-type PresetButtonEntry = {
+type PresetRow = {
 	id: string,
-	button: TextButton,
+	controller: Components.ButtonController,
 }
 
-local ROW_HEIGHT = 30
-local MODE_OPTIONS = { "Play", "Run", "Multiplayer" }
+local LIST_WIDTH = 194
+local PANE_PADDING = 10
+local CONTROL_HEIGHT = 28
+local LABEL_HEIGHT = 18
+local FIELD_GAP = 4
+local MIN_PLAYERS = 1
+local MAX_PLAYERS = 8
+local VALIDATION_DELAY = 0.15
 
-local function createTextLabel(parent: Instance, text: string, size: UDim2, position: UDim2): TextLabel
-	local label = Instance.new("TextLabel")
-	label.BackgroundTransparency = 1
-	label.Font = Enum.Font.SourceSansSemibold
-	label.Text = text
-	label.TextColor3 = Color3.fromRGB(235, 235, 235)
-	label.TextSize = 16
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.Size = size
-	label.Position = position
-	label.Parent = parent
-	return label
+local FALLBACK = Components.FALLBACK
+
+local function trim(text: string): string
+	local trimmed = string.gsub(text, "^%s*(.-)%s*$", "%1")
+	return trimmed
 end
 
-local function createTextBox(parent: Instance, placeholderText: string, size: UDim2, position: UDim2): TextBox
-	local textBox = Instance.new("TextBox")
-	textBox.BackgroundColor3 = Color3.fromRGB(33, 37, 43)
-	textBox.BorderSizePixel = 0
-	textBox.ClearTextOnFocus = false
-	textBox.Font = Enum.Font.Code
-	textBox.PlaceholderColor3 = Color3.fromRGB(140, 147, 157)
-	textBox.PlaceholderText = placeholderText
-	textBox.Text = ""
-	textBox.TextColor3 = Color3.fromRGB(245, 245, 245)
-	textBox.TextSize = 16
-	textBox.TextXAlignment = Enum.TextXAlignment.Left
-	textBox.Size = size
-	textBox.Position = position
-	textBox.Parent = parent
-	return textBox
+-- Decode errors arrive as "Script:12: message". The location is noise in a widget.
+local function cleanErrorMessage(message: string): string
+	local cleaned = string.gsub(tostring(message), "^.-:%d+:%s*", "")
+	return cleaned
 end
 
-local function createButton(parent: Instance, text: string, size: UDim2, position: UDim2, color: Color3): TextButton
-	local button = Instance.new("TextButton")
-	button.AutoButtonColor = true
-	button.BackgroundColor3 = color
-	button.BorderSizePixel = 0
-	button.Font = Enum.Font.SourceSansSemibold
-	button.Text = text
-	button.TextColor3 = Color3.fromRGB(255, 255, 255)
-	button.TextSize = 16
-	button.Size = size
-	button.Position = position
-	button.Parent = parent
-	return button
+local function describeArgsType(value: any): string
+	if value == nil then
+		return "nil"
+	end
+
+	local valueType = type(value)
+	if valueType ~= "table" then
+		return valueType
+	end
+
+	if #value > 0 then
+		return "array"
+	end
+
+	if next(value) == nil then
+		return "empty table"
+	end
+
+	return "object"
 end
 
 function Widget.new(plugin: Plugin, callbacks: Callbacks): Controller
-	local widgetInfo = DockWidgetPluginGuiInfo.new(
-		Enum.InitialDockState.Right,
-		false,
-		false,
-		520,
-		520,
-		420,
-		520
-	)
+	local widgetInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Right, false, false, 560, 560, 380, 420)
 
 	local gui = plugin:CreateDockWidgetPluginGui("StudioTestPresetPluginWidget", widgetInfo)
 	gui.Title = "Studio Test Presets"
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
 	local root = Instance.new("Frame")
-	root.BackgroundColor3 = Color3.fromRGB(22, 24, 29)
 	root.BorderSizePixel = 0
 	root.Size = UDim2.fromScale(1, 1)
 	root.Parent = gui
+	Theme.bind(root, "BackgroundColor3", Enum.StudioStyleGuideColor.MainBackground, FALLBACK.background)
 
-	local listPanel = Instance.new("Frame")
-	listPanel.BackgroundColor3 = Color3.fromRGB(28, 31, 37)
-	listPanel.BorderSizePixel = 0
-	listPanel.Position = UDim2.new(0, 12, 0, 12)
-	listPanel.Size = UDim2.new(0, 170, 1, -24)
-	listPanel.Parent = root
+	----------------------------------------------------------------------------
+	-- Preset list pane
+	----------------------------------------------------------------------------
 
-	local listTitle = createTextLabel(listPanel, "Saved Presets", UDim2.new(1, -16, 0, 24), UDim2.new(0, 8, 0, 8))
-	listTitle.TextSize = 18
+	local listPane = Instance.new("Frame")
+	listPane.BackgroundTransparency = 1
+	listPane.Size = UDim2.new(0, LIST_WIDTH, 1, 0)
+	listPane.Parent = root
+	Components.padding(listPane, PANE_PADDING)
 
-	local refreshButton = createButton(
-		listPanel,
-		"Refresh",
-		UDim2.new(1, -16, 0, ROW_HEIGHT),
-		UDim2.new(0, 8, 0, 38),
-		Color3.fromRGB(64, 112, 189)
-	)
-	local newPresetButton = createButton(
-		listPanel,
-		"New Preset",
-		UDim2.new(1, -16, 0, ROW_HEIGHT),
-		UDim2.new(0, 8, 0, 76),
-		Color3.fromRGB(90, 102, 119)
-	)
-	local listSelectionLabel = createTextLabel(listPanel, "Selected: New Preset", UDim2.new(1, -16, 0, 36), UDim2.new(0, 8, 0, 114))
-	listSelectionLabel.TextColor3 = Color3.fromRGB(173, 181, 191)
-	listSelectionLabel.TextWrapped = true
+	Components.label(listPane, {
+		text = "Presets",
+		font = Components.MEDIUM_FONT,
+		textSize = 15,
+		size = UDim2.new(1, 0, 0, LABEL_HEIGHT),
+	})
 
-	local presetList = Instance.new("ScrollingFrame")
-	presetList.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	presetList.BackgroundColor3 = Color3.fromRGB(22, 24, 29)
-	presetList.BorderSizePixel = 0
-	presetList.CanvasSize = UDim2.new()
-	presetList.Position = UDim2.new(0, 8, 0, 156)
-	presetList.ScrollBarImageColor3 = Color3.fromRGB(90, 97, 110)
-	presetList.Size = UDim2.new(1, -16, 1, -164)
-	presetList.Parent = listPanel
+	local searchBox = Components.textBox(listPane, {
+		placeholder = "Search presets",
+		size = UDim2.new(1, 0, 0, 26),
+		position = UDim2.new(0, 0, 0, 26),
+		textSize = 13,
+	})
 
-	local listLayout = Instance.new("UIListLayout")
-	listLayout.Padding = UDim.new(0, 6)
-	listLayout.Parent = presetList
+	local newPresetButton = Components.button(listPane, {
+		text = "New Preset",
+		size = UDim2.new(1, 0, 0, 26),
+		position = UDim2.new(0, 0, 0, 60),
+		textSize = 13,
+	})
 
-	local formPanel = Instance.new("Frame")
-	formPanel.BackgroundColor3 = Color3.fromRGB(28, 31, 37)
-	formPanel.BorderSizePixel = 0
-	formPanel.Position = UDim2.new(0, 194, 0, 12)
-	formPanel.Size = UDim2.new(1, -206, 1, -24)
-	formPanel.Parent = root
+	local refreshButton = Components.button(listPane, {
+		text = "Refresh",
+		size = UDim2.new(1, 0, 0, 26),
+		position = UDim2.new(0, 0, 0, 92),
+		textSize = 13,
+	})
 
-	local formTitle = createTextLabel(formPanel, "Create / Edit", UDim2.new(1, -144, 0, 24), UDim2.new(0, 8, 0, 8))
-	formTitle.TextSize = 18
+	local listScroll = Instance.new("ScrollingFrame")
+	listScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	listScroll.BackgroundTransparency = 1
+	listScroll.BorderSizePixel = 0
+	listScroll.CanvasSize = UDim2.new()
+	listScroll.Position = UDim2.new(0, 0, 0, 128)
+	listScroll.Size = UDim2.new(1, 0, 1, -128)
+	listScroll.ScrollBarThickness = 6
+	listScroll.Parent = listPane
+	Theme.bind(listScroll, "ScrollBarImageColor3", Enum.StudioStyleGuideColor.ScrollBar, FALLBACK.border)
+	Components.list(listScroll, 4)
 
-	local selectionLabel = createTextLabel(formPanel, "Selected: New Preset", UDim2.new(1, -16, 0, 22), UDim2.new(0, 8, 0, 38))
-	selectionLabel.TextColor3 = Color3.fromRGB(173, 181, 191)
+	local emptyListLabel = Components.label(listScroll, {
+		text = "",
+		textSize = 13,
+		wrapped = true,
+		size = UDim2.new(1, -6, 0, 34),
+		color = Enum.StudioStyleGuideColor.DimmedText,
+		fallback = FALLBACK.dimText,
+	})
+	emptyListLabel.Visible = false
+	emptyListLabel.LayoutOrder = 1000000
 
-	createTextLabel(formPanel, "Preset Name", UDim2.new(1, -16, 0, 22), UDim2.new(0, 8, 0, 72))
-	local nameBox = createTextBox(formPanel, "Lobby Spawn", UDim2.new(1, -16, 0, ROW_HEIGHT), UDim2.new(0, 8, 0, 96))
+	local divider = Instance.new("Frame")
+	divider.BorderSizePixel = 0
+	divider.Position = UDim2.new(0, LIST_WIDTH, 0, 0)
+	divider.Size = UDim2.new(0, 1, 1, 0)
+	divider.Parent = root
+	Theme.bind(divider, "BackgroundColor3", Enum.StudioStyleGuideColor.Border, FALLBACK.border)
 
-	createTextLabel(formPanel, "Mode", UDim2.new(1, -16, 0, 22), UDim2.new(0, 8, 0, 136))
-	local modeButtonWidth = 88
-	local modeButtons = {}
-	local selectedMode: PresetMode = "Play"
+	----------------------------------------------------------------------------
+	-- Form pane
+	----------------------------------------------------------------------------
 
-	local createModeButton do
-		function createModeButton(mode: PresetMode, index: number)
-			local button = createButton(
-				formPanel,
-				mode,
-				UDim2.new(0, modeButtonWidth, 0, ROW_HEIGHT),
-				UDim2.new(0, 8 + ((modeButtonWidth + 8) * (index - 1)), 0, 160),
-				Color3.fromRGB(53, 94, 154)
-			)
-			modeButtons[mode] = button
-		end
+	local formPane = Instance.new("Frame")
+	formPane.BackgroundTransparency = 1
+	formPane.Position = UDim2.new(0, LIST_WIDTH + 1, 0, 0)
+	formPane.Size = UDim2.new(1, -(LIST_WIDTH + 1), 1, 0)
+	formPane.Parent = root
+	Components.padding(formPane, PANE_PADDING)
+
+	local selectionLabel = Components.label(formPane, {
+		text = "New Preset",
+		font = Components.MEDIUM_FONT,
+		textSize = 15,
+		size = UDim2.new(1, -120, 0, 26),
+	})
+
+	local runButton = Components.button(formPane, {
+		text = "Run Test",
+		size = UDim2.new(0, 112, 0, 26),
+		position = UDim2.new(1, -112, 0, 0),
+		textSize = 13,
+		color = Enum.StudioStyleGuideColor.MainButton,
+		fallback = FALLBACK.mainButton,
+		textColor = Enum.StudioStyleGuideColor.BrightText,
+		textFallback = FALLBACK.brightText,
+	})
+	runButton.instance.Visible = false
+
+	local formScroll = Instance.new("ScrollingFrame")
+	formScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	formScroll.BackgroundTransparency = 1
+	formScroll.BorderSizePixel = 0
+	formScroll.CanvasSize = UDim2.new()
+	formScroll.Position = UDim2.new(0, 0, 0, 36)
+	formScroll.Size = UDim2.new(1, 0, 1, -122)
+	formScroll.ScrollBarThickness = 6
+	formScroll.Parent = formPane
+	Theme.bind(formScroll, "ScrollBarImageColor3", Enum.StudioStyleGuideColor.ScrollBar, FALLBACK.border)
+	Components.list(formScroll, 10)
+
+	-- Each field is a row in the list layout, so inserting one never moves another.
+	local function fieldRow(order: number, labelText: string, controlHeight: number): (Frame, number)
+		local row = Components.row(formScroll, LABEL_HEIGHT + FIELD_GAP + controlHeight, order)
+		Components.label(row, {
+			text = labelText,
+			textSize = 13,
+			size = UDim2.new(1, 0, 0, LABEL_HEIGHT),
+			color = Enum.StudioStyleGuideColor.SubText,
+			fallback = FALLBACK.subText,
+		})
+		return row, LABEL_HEIGHT + FIELD_GAP
 	end
 
-	for index, modeName in MODE_OPTIONS do
-		createModeButton(modeName :: PresetMode, index)
+	local nameRow, nameOffset = fieldRow(1, "Preset Name", CONTROL_HEIGHT)
+	local nameBox = Components.textBox(nameRow, {
+		placeholder = "Lobby Spawn",
+		size = UDim2.new(1, -6, 0, CONTROL_HEIGHT),
+		position = UDim2.new(0, 0, 0, nameOffset),
+	})
+
+	local modeRow, modeOffset = fieldRow(2, "Mode", CONTROL_HEIGHT)
+	local modeHolder = Instance.new("Frame")
+	modeHolder.BackgroundTransparency = 1
+	modeHolder.Position = UDim2.new(0, 0, 0, modeOffset)
+	modeHolder.Size = UDim2.new(1, -6, 0, CONTROL_HEIGHT)
+	modeHolder.Parent = modeRow
+
+	local modeLayout = Components.list(modeHolder, 6)
+	modeLayout.FillDirection = Enum.FillDirection.Horizontal
+
+	local modeButtons: { [string]: Components.ButtonController } = {}
+	for index, modeName in { "Play", "Run", "Multiplayer" } do
+		modeButtons[modeName] = Components.button(modeHolder, {
+			text = modeName,
+			size = UDim2.new(1 / 3, -4, 1, 0),
+			layoutOrder = index,
+			textSize = 13,
+		})
 	end
 
-	createTextLabel(formPanel, "Player Count", UDim2.new(1, -16, 0, 22), UDim2.new(0, 8, 0, 200))
-	local playerCountBox = createTextBox(formPanel, "1", UDim2.new(0, 90, 0, ROW_HEIGHT), UDim2.new(0, 8, 0, 224))
-	playerCountBox.Text = "1"
+	local playersRow, playersOffset = fieldRow(3, "Player Count", CONTROL_HEIGHT)
+	local decreaseButton = Components.button(playersRow, {
+		text = "-",
+		size = UDim2.new(0, CONTROL_HEIGHT, 0, CONTROL_HEIGHT),
+		position = UDim2.new(0, 0, 0, playersOffset),
+		textSize = 16,
+	})
+	local playerCountLabel = Components.label(playersRow, {
+		text = "1",
+		size = UDim2.new(0, 44, 0, CONTROL_HEIGHT),
+		position = UDim2.new(0, CONTROL_HEIGHT + 4, 0, playersOffset),
+		alignX = Enum.TextXAlignment.Center,
+		font = Components.MEDIUM_FONT,
+		textSize = 15,
+	})
+	local increaseButton = Components.button(playersRow, {
+		text = "+",
+		size = UDim2.new(0, CONTROL_HEIGHT, 0, CONTROL_HEIGHT),
+		position = UDim2.new(0, CONTROL_HEIGHT + 52, 0, playersOffset),
+		textSize = 16,
+	})
+	local playersHintLabel = Components.label(playersRow, {
+		text = "Multiplayer only",
+		textSize = 12,
+		size = UDim2.new(1, -(CONTROL_HEIGHT * 2 + 60), 0, CONTROL_HEIGHT),
+		position = UDim2.new(0, CONTROL_HEIGHT * 2 + 60, 0, playersOffset),
+		color = Enum.StudioStyleGuideColor.DimmedText,
+		fallback = FALLBACK.dimText,
+	})
 
-	createTextLabel(formPanel, "Args JSON", UDim2.new(1, -16, 0, 22), UDim2.new(0, 8, 0, 264))
-	local argsBox = createTextBox(formPanel, '{"testName":"LobbySpawn"}', UDim2.new(1, -16, 0, 96), UDim2.new(0, 8, 0, 288))
-	argsBox.MultiLine = true
-	argsBox.TextYAlignment = Enum.TextYAlignment.Top
+	local argsRow, argsOffset = fieldRow(4, "Args JSON", 92 + FIELD_GAP + 16)
+	local argsBox = Components.textBox(argsRow, {
+		placeholder = '{"testName":"LobbySpawn","timeout":15}',
+		size = UDim2.new(1, -6, 0, 92),
+		position = UDim2.new(0, 0, 0, argsOffset),
+		multiLine = true,
+		font = Components.CODE_FONT,
+		textSize = 13,
+		alignY = Enum.TextYAlignment.Top,
+	})
+	local validationLabel, setValidationColor = Components.label(argsRow, {
+		text = "",
+		textSize = 12,
+		size = UDim2.new(1, -6, 0, 16),
+		position = UDim2.new(0, 0, 0, argsOffset + 92 + FIELD_GAP),
+		color = Enum.StudioStyleGuideColor.DimmedText,
+		fallback = FALLBACK.dimText,
+	})
 
-	local saveButton = createButton(
-		formPanel,
-		"Save Preset",
-		UDim2.new(1, -16, 0, ROW_HEIGHT),
-		UDim2.new(0, 8, 1, -76),
-		Color3.fromRGB(66, 148, 94)
-	)
-	local testButton = createButton(
-		formPanel,
-		"Test Selected",
-		UDim2.new(0, 128, 0, ROW_HEIGHT),
-		UDim2.new(1, -136, 0, 8),
-		Color3.fromRGB(64, 112, 189)
-	)
-	local deleteButton = createButton(
-		formPanel,
-		"Delete Preset",
-		UDim2.new(1, -16, 0, ROW_HEIGHT),
-		UDim2.new(0, 8, 1, -40),
-		Color3.fromRGB(156, 67, 67)
-	)
+	----------------------------------------------------------------------------
+	-- Status and actions
+	----------------------------------------------------------------------------
 
-	local statusLabel = createTextLabel(formPanel, "", UDim2.new(1, -16, 0, 20), UDim2.new(0, 8, 1, -104))
-	statusLabel.TextWrapped = true
-	statusLabel.TextColor3 = Color3.fromRGB(157, 218, 171)
+	local statusLabel, setStatusColor = Components.label(formPane, {
+		text = "",
+		textSize = 13,
+		wrapped = true,
+		automaticSize = Enum.AutomaticSize.Y,
+		size = UDim2.new(1, 0, 0, 0),
+		alignY = Enum.TextYAlignment.Bottom,
+		color = Enum.StudioStyleGuideColor.InfoText,
+		fallback = FALLBACK.infoText,
+	})
+	statusLabel.AnchorPoint = Vector2.new(0, 1)
+	statusLabel.Position = UDim2.new(0, 0, 1, -38)
+	statusLabel.BackgroundTransparency = 0
+	-- Opaque so a long error painting upward covers the form instead of blending.
+	Theme.bind(statusLabel, "BackgroundColor3", Enum.StudioStyleGuideColor.MainBackground, FALLBACK.background)
 
+	-- Bounded so a long decode error cannot grow over the whole form.
+	local statusConstraint = Instance.new("UISizeConstraint")
+	statusConstraint.MaxSize = Vector2.new(math.huge, 96)
+	statusConstraint.Parent = statusLabel
+
+	local actionBar = Instance.new("Frame")
+	actionBar.AnchorPoint = Vector2.new(0, 1)
+	actionBar.BackgroundTransparency = 1
+	actionBar.Position = UDim2.new(0, 0, 1, 0)
+	actionBar.Size = UDim2.new(1, 0, 0, CONTROL_HEIGHT)
+	actionBar.Parent = formPane
+
+	local saveButton = Components.button(actionBar, {
+		text = "Save Preset",
+		size = UDim2.new(1, -124, 1, 0),
+		color = Enum.StudioStyleGuideColor.MainButton,
+		fallback = FALLBACK.mainButton,
+		textColor = Enum.StudioStyleGuideColor.BrightText,
+		textFallback = FALLBACK.brightText,
+	})
+	local deleteButton = Components.button(actionBar, {
+		text = "Delete",
+		size = UDim2.new(0, 116, 1, 0),
+		position = UDim2.new(1, -116, 0, 0),
+		textColor = Enum.StudioStyleGuideColor.ErrorText,
+		textFallback = FALLBACK.errorText,
+	})
+	deleteButton.instance.Visible = false
+
+	----------------------------------------------------------------------------
+	-- Delete confirmation overlay
+	----------------------------------------------------------------------------
+
+	local overlay = Instance.new("Frame")
+	overlay.BackgroundTransparency = 0.35
+	overlay.BorderSizePixel = 0
+	overlay.Size = UDim2.fromScale(1, 1)
+	overlay.Visible = false
+	overlay.ZIndex = 10
+	overlay.Parent = root
+	Theme.bind(overlay, "BackgroundColor3", Enum.StudioStyleGuideColor.Dark, Color3.fromRGB(0, 0, 0))
+
+	local dialog = Instance.new("Frame")
+	dialog.AnchorPoint = Vector2.new(0.5, 0.5)
+	dialog.BorderSizePixel = 0
+	dialog.Position = UDim2.fromScale(0.5, 0.5)
+	dialog.Size = UDim2.new(1, -60, 0, 132)
+	dialog.ZIndex = 11
+	dialog.Parent = overlay
+	Theme.bind(dialog, "BackgroundColor3", Enum.StudioStyleGuideColor.MainBackground, FALLBACK.background)
+
+	local dialogConstraint = Instance.new("UISizeConstraint")
+	dialogConstraint.MaxSize = Vector2.new(320, math.huge)
+	dialogConstraint.Parent = dialog
+
+	local dialogCorner = Instance.new("UICorner")
+	dialogCorner.CornerRadius = UDim.new(0, 6)
+	dialogCorner.Parent = dialog
+
+	local dialogStroke = Instance.new("UIStroke")
+	dialogStroke.Thickness = 1
+	dialogStroke.Parent = dialog
+	Theme.bind(dialogStroke, "Color", Enum.StudioStyleGuideColor.Border, FALLBACK.border)
+
+	Components.padding(dialog, 14)
+
+	local dialogLabel = Components.label(dialog, {
+		text = "",
+		textSize = 14,
+		wrapped = true,
+		size = UDim2.new(1, 0, 0, 60),
+		alignY = Enum.TextYAlignment.Top,
+	})
+	dialogLabel.ZIndex = 12
+
+	local cancelButton = Components.button(dialog, {
+		text = "Cancel",
+		size = UDim2.new(0.5, -4, 0, CONTROL_HEIGHT),
+		position = UDim2.new(0, 0, 1, -CONTROL_HEIGHT),
+		textSize = 13,
+	})
+	cancelButton.instance.ZIndex = 12
+
+	local confirmButton = Components.button(dialog, {
+		text = "Delete",
+		size = UDim2.new(0.5, -4, 0, CONTROL_HEIGHT),
+		position = UDim2.new(0.5, 4, 1, -CONTROL_HEIGHT),
+		textSize = 13,
+		color = Enum.StudioStyleGuideColor.DialogMainButton,
+		fallback = FALLBACK.mainButton,
+		textColor = Enum.StudioStyleGuideColor.BrightText,
+		textFallback = FALLBACK.brightText,
+	})
+	confirmButton.instance.ZIndex = 12
+
+	----------------------------------------------------------------------------
+	-- State
+	----------------------------------------------------------------------------
+
+	local allPresets: { Preset } = {}
+	local presetRows: { PresetRow } = {}
 	local selectedPresetId = ""
-	local presetButtons: { PresetButtonEntry } = {}
-
-	local function updateSelectedLabels(selectedName: string)
-		local selectedText = string.format("Selected: %s", selectedName)
-		selectionLabel.Text = selectedText
-		listSelectionLabel.Text = selectedText
-	end
-
-	local function updatePresetButtonStyles()
-		for _, entry in presetButtons do
-			entry.button.BackgroundColor3 = if entry.id == selectedPresetId
-				then Color3.fromRGB(64, 112, 189)
-				else Color3.fromRGB(52, 58, 70)
-		end
-	end
-
-	local function updateModeButtonStyles()
-		for modeName, button in modeButtons do
-			button.BackgroundColor3 = if modeName == selectedMode
-				then Color3.fromRGB(53, 94, 154)
-				else Color3.fromRGB(63, 70, 82)
-		end
-
-		local isMultiplayer = selectedMode == "Multiplayer"
-		playerCountBox.TextEditable = isMultiplayer
-		playerCountBox.BackgroundColor3 = if isMultiplayer
-			then Color3.fromRGB(33, 37, 43)
-			else Color3.fromRGB(42, 46, 54)
-	end
+	local selectedMode: PresetMode = "Play"
+	local playerCount = MIN_PLAYERS
+	local validationToken = 0
+	local isDestroyed = false
 
 	local function setStatus(message: string, isError: boolean?)
 		statusLabel.Text = message
-		statusLabel.TextColor3 = if isError
-			then Color3.fromRGB(242, 121, 121)
-			else Color3.fromRGB(157, 218, 171)
+		statusLabel.BackgroundTransparency = if message == "" then 1 else 0
+		setStatusColor(
+			if isError then Enum.StudioStyleGuideColor.ErrorText else Enum.StudioStyleGuideColor.InfoText,
+			nil
+		)
+	end
+
+	local function setValidation(message: string, isError: boolean)
+		validationLabel.Text = message
+		setValidationColor(
+			if isError then Enum.StudioStyleGuideColor.ErrorText else Enum.StudioStyleGuideColor.DimmedText,
+			nil
+		)
+	end
+
+	local function validateArgs()
+		if trim(argsBox.Text) == "" then
+			setValidation("no args - the test receives nil", false)
+			return
+		end
+
+		local success, value = PresetArgs.decode(argsBox.Text)
+		if success then
+			setValidation(string.format("valid - %s", describeArgsType(value)), false)
+		else
+			setValidation(string.format("invalid: %s", cleanErrorMessage(value)), true)
+		end
+	end
+
+	local function scheduleValidation()
+		validationToken += 1
+		local token = validationToken
+
+		task.delay(VALIDATION_DELAY, function()
+			if isDestroyed or token ~= validationToken then
+				return
+			end
+
+			validateArgs()
+		end)
+	end
+
+	local function updateModeButtons()
+		for modeName, controller in modeButtons do
+			controller.setSelected(modeName == selectedMode)
+		end
+
+		local isMultiplayer = selectedMode == "Multiplayer"
+		decreaseButton.setEnabled(isMultiplayer)
+		increaseButton.setEnabled(isMultiplayer)
+		playersHintLabel.Visible = not isMultiplayer
+		playerCountLabel.TextTransparency = if isMultiplayer then 0 else 0.45
+	end
+
+	local function setPlayerCount(value: number)
+		playerCount = math.clamp(math.floor(value), MIN_PLAYERS, MAX_PLAYERS)
+		playerCountLabel.Text = tostring(playerCount)
+	end
+
+	local function setSelectedMode(mode: PresetMode)
+		selectedMode = mode
+		updateModeButtons()
+	end
+
+	local function updateRowSelection()
+		for _, row in presetRows do
+			row.controller.setSelected(row.id == selectedPresetId)
+		end
 	end
 
 	local function clearSelection()
 		selectedPresetId = ""
-		updateSelectedLabels("New Preset")
+		selectionLabel.Text = "New Preset"
 		nameBox.Text = ""
-		selectedMode = "Play"
-		playerCountBox.Text = "1"
 		argsBox.Text = ""
-		testButton.Visible = false
-		deleteButton.Visible = false
-		updateModeButtonStyles()
-		updatePresetButtonStyles()
+		setSelectedMode("Play")
+		setPlayerCount(MIN_PLAYERS)
+		runButton.instance.Visible = false
+		deleteButton.instance.Visible = false
+		updateRowSelection()
 		setStatus("", false)
+		validateArgs()
 	end
 
 	local function loadPreset(preset: Preset)
 		selectedPresetId = preset.id
-		updateSelectedLabels(preset.name)
+		selectionLabel.Text = preset.name
 		nameBox.Text = preset.name
-		selectedMode = preset.mode
-		playerCountBox.Text = tostring(preset.playerCount)
 		argsBox.Text = preset.argsJson
-		testButton.Visible = true
-		deleteButton.Visible = true
-		updateModeButtonStyles()
-		updatePresetButtonStyles()
-		setStatus("Loaded preset", false)
+		setSelectedMode(preset.mode)
+		setPlayerCount(preset.playerCount)
+		runButton.instance.Visible = true
+		deleteButton.instance.Visible = true
+		updateRowSelection()
+		validateArgs()
 	end
 
-	local function parsePlayerCount(): number?
-		local parsedValue = tonumber(playerCountBox.Text)
-		if not parsedValue then
-			return nil
+	local function rebuildPresetRows()
+		for _, row in presetRows do
+			row.controller.instance:Destroy()
+		end
+		table.clear(presetRows)
+
+		local query = searchBox.Text
+		local visiblePresets = PresetStore.filter(allPresets, query)
+
+		for index, preset in visiblePresets do
+			local rowController = Components.button(listScroll, {
+				text = "",
+				size = UDim2.new(1, -6, 0, 34),
+				layoutOrder = index,
+				color = Enum.StudioStyleGuideColor.TableItem,
+				fallback = FALLBACK.item,
+			})
+
+			local rowPadding = Instance.new("UIPadding")
+			rowPadding.PaddingLeft = UDim.new(0, 8)
+			rowPadding.PaddingRight = UDim.new(0, 8)
+			rowPadding.Parent = rowController.instance
+
+			local nameLabel = Components.label(rowController.instance, {
+				text = preset.name,
+				textSize = 13,
+				size = UDim2.new(1, -66, 1, 0),
+			})
+			nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+
+			Components.label(rowController.instance, {
+				text = preset.mode,
+				textSize = 11,
+				size = UDim2.new(0, 62, 1, 0),
+				position = UDim2.new(1, -62, 0, 0),
+				alignX = Enum.TextXAlignment.Right,
+				color = Enum.StudioStyleGuideColor.DimmedText,
+				fallback = FALLBACK.dimText,
+			})
+
+			rowController.onClick(function()
+				loadPreset(preset)
+			end)
+
+			table.insert(presetRows, {
+				id = preset.id,
+				controller = rowController,
+			})
 		end
 
-		return math.floor(parsedValue)
+		if #visiblePresets == 0 then
+			emptyListLabel.Visible = true
+			emptyListLabel.Text = if #allPresets == 0
+				then "No presets yet. Use New Preset to add one."
+				else string.format('No presets match "%s".', trim(query))
+		else
+			emptyListLabel.Visible = false
+		end
+
+		updateRowSelection()
 	end
 
 	local function makePresetFromForm(): Preset?
-		local trimmedName = string.gsub(nameBox.Text, "^%s*(.-)%s*$", "%1")
+		local trimmedName = trim(nameBox.Text)
 		if trimmedName == "" then
 			setStatus("Preset name is required.", true)
-			return nil
-		end
-
-		local playerCount = parsePlayerCount() or 1
-		if selectedMode == "Multiplayer" and (playerCount < 1 or playerCount > 8) then
-			setStatus("Multiplayer presets require a player count between 1 and 8.", true)
 			return nil
 		end
 
@@ -313,69 +595,66 @@ function Widget.new(plugin: Plugin, callbacks: Callbacks): Controller
 		}
 	end
 
-	local function rebuildPresetButtons(presets: { Preset })
-		for _, entry in presetButtons do
-			entry.button:Destroy()
-		end
-		table.clear(presetButtons)
+	----------------------------------------------------------------------------
+	-- Wiring
+	----------------------------------------------------------------------------
 
-		for _, preset in presets do
-			local button = createButton(
-				presetList,
-				string.format("%s (%s)", preset.name, preset.mode),
-				UDim2.new(1, -6, 0, 38),
-				UDim2.new(),
-				Color3.fromRGB(52, 58, 70)
-			)
-			button.TextWrapped = true
-			button.MouseButton1Click:Connect(function()
-				loadPreset(preset)
-			end)
-			table.insert(presetButtons, {
-				id = preset.id,
-				button = button,
-			})
-		end
+	searchBox:GetPropertyChangedSignal("Text"):Connect(rebuildPresetRows)
+	argsBox:GetPropertyChangedSignal("Text"):Connect(scheduleValidation)
 
-		updatePresetButtonStyles()
-	end
+	refreshButton.onClick(callbacks.onRefresh)
+	newPresetButton.onClick(clearSelection)
 
-	refreshButton.MouseButton1Click:Connect(callbacks.onRefresh)
-	newPresetButton.MouseButton1Click:Connect(clearSelection)
-	saveButton.MouseButton1Click:Connect(function()
+	saveButton.onClick(function()
 		local preset = makePresetFromForm()
-		if not preset then
-			return
+		if preset then
+			callbacks.onSave(preset)
 		end
-
-		callbacks.onSave(preset)
 	end)
-	testButton.MouseButton1Click:Connect(function()
+
+	runButton.onClick(function()
 		if selectedPresetId == "" then
-			setStatus("Select a preset before testing it.", true)
+			setStatus("Select a preset before running it.", true)
 			return
 		end
 
 		callbacks.onTest(selectedPresetId)
 	end)
-	deleteButton.MouseButton1Click:Connect(function()
+
+	deleteButton.onClick(function()
 		if selectedPresetId == "" then
 			setStatus("Select a preset before deleting it.", true)
 			return
 		end
 
-		callbacks.onDelete(selectedPresetId)
+		dialogLabel.Text = string.format('Delete preset "%s"? This cannot be undone.', trim(nameBox.Text))
+		overlay.Visible = true
 	end)
 
-	for modeName, button in modeButtons do
-		button.MouseButton1Click:Connect(function()
-			selectedMode = modeName :: PresetMode
-			updateModeButtonStyles()
+	cancelButton.onClick(function()
+		overlay.Visible = false
+	end)
+
+	confirmButton.onClick(function()
+		overlay.Visible = false
+		if selectedPresetId ~= "" then
+			callbacks.onDelete(selectedPresetId)
+		end
+	end)
+
+	for modeName, controller in modeButtons do
+		controller.onClick(function()
+			setSelectedMode(modeName :: PresetMode)
 		end)
 	end
 
-	testButton.Visible = false
-	deleteButton.Visible = false
+	decreaseButton.onClick(function()
+		setPlayerCount(playerCount - 1)
+	end)
+	increaseButton.onClick(function()
+		setPlayerCount(playerCount + 1)
+	end)
+
 	clearSelection()
 
 	return {
@@ -384,7 +663,8 @@ function Widget.new(plugin: Plugin, callbacks: Callbacks): Controller
 			gui.Enabled = true
 		end,
 		setPresets = function(presets: { Preset })
-			rebuildPresetButtons(presets)
+			allPresets = presets
+			rebuildPresetRows()
 
 			if selectedPresetId ~= "" then
 				for _, preset in presets do
@@ -399,6 +679,10 @@ function Widget.new(plugin: Plugin, callbacks: Callbacks): Controller
 		end,
 		setStatus = setStatus,
 		clearSelection = clearSelection,
+		destroy = function()
+			isDestroyed = true
+			overlay.Visible = false
+		end,
 	}
 end
 

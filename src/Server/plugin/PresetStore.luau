@@ -129,6 +129,31 @@ function PresetStore.listPresets(): { Preset }
 	return presets
 end
 
+--[[
+	Filters presets by a case-insensitive substring of their name or mode.
+
+	A blank query returns the input unchanged. Pure, so the widget's search box
+	can be tested without Studio.
+]]
+function PresetStore.filter(presets: { Preset }, query: string): { Preset }
+	local trimmed = string.gsub(query, "^%s*(.-)%s*$", "%1")
+	if trimmed == "" then
+		return presets
+	end
+
+	local needle = string.lower(trimmed)
+	local matches = {}
+
+	for _, preset in presets do
+		local haystack = string.lower(string.format("%s %s", preset.name, preset.mode))
+		if string.find(haystack, needle, 1, true) then
+			table.insert(matches, preset)
+		end
+	end
+
+	return matches
+end
+
 function PresetStore.getPreset(id: string): Preset?
 	local presetFolder = getRootFolder():FindFirstChild(id)
 	if not presetFolder then
